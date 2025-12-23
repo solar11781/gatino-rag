@@ -1,3 +1,6 @@
 venv/
 __pycache__/
-.env
+dataset/
+dummy_dataset/
+code_chunks.jsonl
+*.jsonl

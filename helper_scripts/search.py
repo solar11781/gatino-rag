@@ -1,10 +1,19 @@
 import sys
 from pathlib import Path
 
+# Allow running as a script
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 from qdrant_client import QdrantClient
 
-from config import QDRANT_URL, QDRANT_COLLECTION, CLEANED_ROOT
-from index_code import embed_text
+from config import (
+    QDRANT_URL,
+    QDRANT_COLLECTION,
+    CLEANED_ROOT,
+)
+
+from indexing.embeddings import embed_text
 
 
 def read_code_fragment(full_path: Path, start: int, end: int) -> str:
@@ -46,6 +55,7 @@ def search_code(query: str, limit: int = 5):
         repo = p.get("repo_name")
         file_path = p.get("file_path")
         chunk_id = p.get("chunk_id")
+        subchunk_id = p.get("subchunk_id")
         start_line = p.get("start_line")
         end_line = p.get("end_line")
         language = p.get("language")
@@ -60,6 +70,7 @@ def search_code(query: str, limit: int = 5):
         print(f"FILE:       {file_path}")
         print(f"LANG:       {language}")
         print(f"CHUNK ID:   {chunk_id}")
+        print(f"SUBCHUNK ID:{subchunk_id}")
         print(f"LINES:      {start_line}-{end_line}")
         print(f"DISK PATH:  {full_path}")
         print("------------------------------------------------------------")

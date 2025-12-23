@@ -9,8 +9,8 @@ from config import MAX_LINES_PER_CHUNK, MIN_LINES_PER_CHUNK
 # ---------- Python ----------
 PY_PREFIXES = ("def ", "class ", "async def ")
 
+# Start a new chunk at lines beginning with 'def ', 'class ', or 'async def '
 def split_by_functions_py(lines: List[str]) -> List[Dict[str, int]]:
-    # Start a new chunk at lines beginning with 'def ', 'class ', or 'async def '
     markers = []
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -36,12 +36,12 @@ JS_TS_PREFIXES = (
     "class ",
 )
 
+# Simple heuristic for arrow functions
 def is_arrow_function_line(line: str) -> bool:
-    # Simple heuristic for arrow functions
     return "=" in line and "=>" in line and "(" in line and ")" in line
 
+# Start a chunk at lines that look like functions/classes or arrow functions
 def split_by_functions_js_ts(lines: List[str]) -> List[Dict[str, int]]:
-    # Start a chunk at lines that look like functions/classes or arrow functions.
     markers = []
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -59,7 +59,6 @@ def split_by_functions_js_ts(lines: List[str]) -> List[Dict[str, int]]:
 
 
 # ---------- Java / C# / Kotlin / Swift ----------
-
 OOP_CLASS_PREFIXES = (
     "public class ",
     "class ",
@@ -82,11 +81,8 @@ OOP_METHOD_PREFIXES = (
     "override ",
 )
 
+# Rough check for method declarations in Java-like languages by looking for a visibility/modifier at the start, plus '(...)' and ending with '{'
 def is_java_like_method_line(line: str) -> bool:
-    """
-    Rough check for method declarations in Java-like languages
-    by looking for a visibility/modifier at the start, plus '(...)' and ending with '{'
-    """
     stripped = line.strip()
     if not any(stripped.startswith(p) for p in OOP_METHOD_PREFIXES):
         return False
@@ -94,11 +90,8 @@ def is_java_like_method_line(line: str) -> bool:
         return True
     return False
 
+# Start a chunk at class declarations or typical method signatures
 def split_by_functions_java_like(lines: List[str]) -> List[Dict[str, int]]:
-    """
-    Start a chunk at class declarations
-    Start a chunk at typical method signatures
-    """
     markers = []
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -116,7 +109,6 @@ def split_by_functions_java_like(lines: List[str]) -> List[Dict[str, int]]:
 
 
 # ---------- Go ----------
-
 def split_by_functions_go(lines: List[str]) -> List[Dict[str, int]]:
     # Start a chunk at 'func ' or 'type '
     markers = []
@@ -136,7 +128,6 @@ def split_by_functions_go(lines: List[str]) -> List[Dict[str, int]]:
 
 
 # ---------- PHP ----------
-
 def split_by_functions_php(lines: List[str]) -> List[Dict[str, int]]:
     # Start a chunk at 'function ' or 'class '
     markers = []
@@ -156,9 +147,7 @@ def split_by_functions_php(lines: List[str]) -> List[Dict[str, int]]:
 
 
 # ---------- Ruby ----------
-
 def split_by_functions_ruby(lines: List[str]) -> List[Dict[str, int]]:
-    # Start a chunk at 'def ' or 'class '
     markers = []
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -176,9 +165,7 @@ def split_by_functions_ruby(lines: List[str]) -> List[Dict[str, int]]:
 
 
 # ---------- Rust ----------
-
 def split_by_functions_rust(lines: List[str]) -> List[Dict[str, int]]:
-    # Start a chunk at 'fn ', 'impl ', 'struct ', 'enum '.
     markers = []
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -201,7 +188,6 @@ def split_by_functions_rust(lines: List[str]) -> List[Dict[str, int]]:
 
 
 # ---------- Shell scripts (.sh, .bat) ----------
-
 def is_shell_function_line(line: str) -> bool:
     stripped = line.lstrip()
     if stripped.startswith("function "):
@@ -273,12 +259,8 @@ def get_function_spans_for_ext(ext: str, lines: List[str]) -> List[Dict[str, int
 # PULL COMMENTS UP INTO THE FUNCTION CHUNK
 # ============================================================
 
+#Comments/blank lines immediately above a function/class become part of that chunk
 def pull_comments_up(lines: List[str], spans: List[Dict[str, int]]) -> List[Dict[str, int]]:
-    """
-    Comments/blank lines immediately above a function/class
-    become part of that chunk, instead of being left behind in previous chunk.
-    """
-
     def is_comment_or_blank(line: str) -> bool:
         stripped = line.strip()
         return (

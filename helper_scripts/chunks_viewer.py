@@ -1,7 +1,18 @@
-from qdrant_client import QdrantClient
-from config import QDRANT_URL, QDRANT_COLLECTION, CLEANED_ROOT
+import sys
 from pathlib import Path
 
+# Allow running as a script
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from qdrant_client import QdrantClient
+from pathlib import Path
+
+from config import (
+    QDRANT_URL,
+    QDRANT_COLLECTION,
+    CLEANED_ROOT,
+)
 
 
 def read_code_fragment(full_path: Path, start: int, end: int) -> str:
@@ -36,6 +47,7 @@ def view_chunks(limit):
         repo = p.get("repo_name")
         file_path = p.get("file_path")
         chunk_id = p.get("chunk_id")
+        subchunk_id = p.get("subchunk_id")
         start = p.get("start_line")
         end = p.get("end_line")
 
@@ -46,6 +58,7 @@ def view_chunks(limit):
         print(f"REPO:           {repo}")
         print(f"FILE:           {file_path}")
         print(f"CHUNK ID:       {chunk_id}")
+        print(f"SUBCHUNK ID:    {subchunk_id}")
         print(f"LINES:          {start}-{end}")
         print(f"DISK PATH:      {full_path}")
         print("------------------------------------------------------------")
@@ -58,4 +71,4 @@ def view_chunks(limit):
 
 
 if __name__ == "__main__":
-    view_chunks(limit=10)
+    view_chunks(limit=int(input('Enter the number of chunks to view:')))
