@@ -4,11 +4,44 @@ A local, script-based pipeline for building a **semantic search / RAG system ove
 
 This project takes raw source code from one or more repositories, **splits it into meaningful chunks**, **embeds those chunks locally**, and **indexes them into a vector database** so they can later be searched or used in RAG systems.
 
-## Pipeline
+## Pipeline Overview
 
-1. **Chunking** – Parse and split source code into structured, size-bounded chunks using Tree-sitter with rule-based fallbacks.
-2. **Indexing** – Convert chunks into vector embeddings using Ollama and store embeddings with metadata in Qdrant
-3. **Search & Validation** – Use helper scripts to inspect chunks, validate output, or perform basic vector search.
+The codebase dataset is expected to be organized by repository, where each top-level folder represents a repo.
+
+1. **Chunking** – Turning raw source code into structured, size-bounded text chunks that are suitable for embedding and indexing.
+
+The process begins by scanning all files under `CLEANED_ROOT` and selecting only those with extensions listed in `CODE_EXTS`. For each file, the chunker records the repository name and the file path relative to `CLEANED_ROOT`.
+
+Files are read as UTF-8 with errors ignored and split into lines. Empty files produce no output. If any single line exceeds the maximum allowed chunk size, the entire file is skipped to avoid processing minified or otherwise un-splittable content that would break downstream embedding.
+
+For valid files, the chunker attempts to extract high-level structural spans such as functions, methods, or classes using Tree-sitter. If Tree-sitter fails, returns no spans, or is disabled, the system falls back to rule-based splitters using simple language heuristics. As a final fallback, files may be split using a purely line-based strategy.
+
+Each identified span is treated as a parent chunk. If the span is already within the size limit, it becomes a single chunk. If it is too large, the chunker attempts to split it further using Tree-sitter subspans when possible. When no structural boundaries are available, the span is split by lines with a small overlap between adjacent subchunks to preserve context.
+
+Before finalizing output, the chunker performs comment handling. Leading comments and blank lines that logically belong to a function or class are attached to the first subchunk of that span so documentation remains paired with the code it describes. Because this step can increase chunk size, size constraints are re-applied afterward. Whitespace-only chunks are discarded.
+
+Each resulting chunk is written as a JSON object to `code_chunks.jsonl` and includes metadata such as:
+
+- repository name
+- file path
+- chunk and subchunk IDs
+- start and end line numbers
+- language
+- chunk text
+
+Result: a clean, structured chunk dataset that preserves code structure and comments while remaining safe for embedding models.
+
+2. **Indexing** – Convert the chunks into vector embeddings using Ollama and store embeddings with metadata in Qdrant
+
+The indexer reads `code_chunks.jsonl` line by line, skipping invalid or empty entries so partial corruption does not interrupt processing. A connection to Qdrant is established and the target collection is created or recreated at the start of each run to ensure a clean index. The collection is configured with a fixed vector size matching the embedding model and uses cosine similarity.
+
+Chunks are processed sequentially. For each chunk, the raw code text is sent to Ollama to generate an embedding. If embedding fails for any reason, the chunk is skipped and indexing continues.
+
+Each embedding is stored alongside its metadata payload. For efficiency, vectors are accumulated into batches before being upserted into Qdrant, with any remaining vectors flushed at the end of the run.
+
+Result: a fully populated Qdrant collection containing embeddings and metadata for every valid chunk, ready to be queried by search or RAG components.
+
+3. **Search & Validation** – Helper scripts to inspect generated chunks, validate outputs, and perform basic vector similarity search against the indexed codebase.
 
 ## Project Structure
 
