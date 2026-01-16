@@ -2,22 +2,32 @@ from pathlib import Path
 
 
 # Path to cleaned dataset
-CLEANED_ROOT = Path(__file__).resolve().parent / "dataset"
+CLEANED_ROOT = Path(__file__).resolve().parent / "codrepo"
 
 # Output file for code chunks
-CHUNKS_JSONL = Path("code_chunks.jsonl")
+CHUNKS_JSONL = Path(__file__).resolve().parent / "code_chunks.jsonl"
 
 CODE_EXTS = {
     ".py",
     ".js", ".jsx", ".ts", ".tsx",
-    ".java", ".cs", ".kt", ".swift",
+    ".java", ".cs", ".kt",
     ".c", ".cpp", ".h", ".hpp",
     ".go",
     ".php",
     ".rb",
     ".rs",
     ".sh", ".bat",
+    ".yml", ".yaml",
 }
+
+# Directories to skip during file scanning
+SKIP_DIRS = {
+    ".git", "node_modules", "dist", "build", ".next",
+    ".venv", "venv", "__pycache__", ".pytest_cache",
+    ".idea", ".vscode", "coverage", ".mypy_cache",
+    ".cache", ".gradle", "target", "bin", "obj"
+}
+
 
 # Line-based fallback chunking
 MAX_LINES_PER_CHUNK = 80
@@ -46,3 +56,13 @@ EMBED_DIM = 768
 
 # Batch size for Qdrant upserts
 BATCH_SIZE = 50
+
+
+# Embedding server
+OLLAMA_EMBED_URL = "http://127.0.0.1:11434"
+
+# LLM server
+OLLAMA_LLM_URL = "http://127.0.0.1:11434"
+
+# Chat model
+LLM_MODEL = "gemma:latest"

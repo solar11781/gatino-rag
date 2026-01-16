@@ -41,6 +41,7 @@ TS_NODE_TYPES: Dict[str, Set[str]] = {
     "python": {
         "function_definition",
         "async_function_definition",
+        "class_definition",
     },
 
     "javascript": {
@@ -49,6 +50,7 @@ TS_NODE_TYPES: Dict[str, Set[str]] = {
         "generator_function_declaration",
         "arrow_function",
         "function_expression",
+	    "class_declaration",
     },
 
     "typescript": {
@@ -56,13 +58,15 @@ TS_NODE_TYPES: Dict[str, Set[str]] = {
         "method_definition",
         "arrow_function",
         "function_expression",
+	    "class_declaration",
     },
 
     "tsx": {
         "function_declaration",
         "method_definition",
         "arrow_function",
-        "function_expression"
+        "function_expression",
+        "class_declaration",
     },
 
     "java": {

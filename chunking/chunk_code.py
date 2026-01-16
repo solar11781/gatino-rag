@@ -19,6 +19,7 @@ from config import (
     TREE_SITTER_FALLBACK_TO_RULES,
     MAX_CHUNK_CHARS,
     SUBCHUNK_OVERLAP_LINES,
+    SKIP_DIRS,
 )
 
 from chunking.manual_chunker import (
@@ -39,8 +40,13 @@ def iter_code_files(root: Path) -> Iterable[Path]:
             continue
 
         for path in repo_dir.rglob("*"):
+            # Skip unwanted directories anywhere in the path
+            if any(d in path.parts for d in SKIP_DIRS):
+                continue
+
             if not path.is_file():
                 continue
+
             ext = path.suffix.lower()
             if ext in CODE_EXTS:
                 yield path
@@ -117,7 +123,8 @@ def chunk_file(path: Path) -> List[Dict]:
         if ts_res.spans:
             spans = ts_res.spans
         else:
-            print(f"[TS] No spans for {path} ({ts_res.error})")
+            if ts_res.error:
+	            print(f"[TS] Error for {path}: {ts_res.error}")
             if not TREE_SITTER_FALLBACK_TO_RULES:
                 return []
 

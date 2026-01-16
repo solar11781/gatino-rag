@@ -7,6 +7,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import json
 from pathlib import Path
+import hashlib
+import re
 from typing import Dict, Iterable, List
 from tqdm import tqdm
 
@@ -37,6 +39,33 @@ def iter_chunks(jsonl_path: Path) -> Iterable[Dict]:
                 continue
             yield obj
 
+
+# -----------------------------
+# metadata extraction helpers
+# -----------------------------
+FUNC_RE = re.compile(r"\b(def|function)\s+([A-Za-z0-9_]+)\b")
+IMPORT_RE = re.compile(r"^\s*(import\s+[A-Za-z0-9_.]+|from\s+[A-Za-z0-9_.]+\s+import)", re.MULTILINE)
+SYMBOL_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+
+def extract_functions(text: str) -> List[str]:
+    return list({m.group(2) for m in FUNC_RE.finditer(text)})
+
+def extract_imports(text: str) -> List[str]:
+    return list({m.group(0).strip() for m in IMPORT_RE.finditer(text)})
+
+def extract_symbols(text: str, limit: int = 50) -> List[str]:
+    toks = SYMBOL_RE.findall(text)
+    # keep unique but stable order
+    seen = []
+    for t in toks:
+        if t not in seen:
+            seen.append(t)
+        if len(seen) >= limit:
+            break
+    return seen
+
+def sha1(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
 def index_chunks():
@@ -74,14 +103,22 @@ def index_chunks():
         end_line = chunk.get("end_line", start_line)
         language = chunk.get("language", "unknown")
 
-        # print("Embedding chars:", len(text))
-        # print("First 200 chars:", repr(text[:200]))
+        # derive file metadata
+        file_name = Path(file_path).name if file_path else ""
+        dir_path = str(Path(file_path).parent) if file_path else ""
+        ext = Path(file_path).suffix.lower().lstrip(".") if file_path else ""
+
+        # extract content metadata
+        functions = extract_functions(text)
+        imports = extract_imports(text)
+        symbols = extract_symbols(text)
+        content_hash = sha1(text)
 
         # Get embedding from Ollama
         try:
             emb = embed_text(text)
         except Exception as e:
-            print("[EMBED SKIP]", len(text), file_path)
+            print("[EMBED SKIP]", len(text), file_path, e)
             continue
 
         # Construct payload with tree-based metadata
@@ -89,12 +126,20 @@ def index_chunks():
             "repo_name": repo_name,
             "project_id": repo_name,  # TODO: temporary placeholder
             "file_path": file_path,
+            "file_name": file_name,
+            "dir_path": dir_path,
+            "ext": ext,
             "chunk_id": chunk_id,
             "subchunk_id": subchunk_id,
             "start_line": start_line,
             "end_line": end_line,
             "language": language,
             "type": "code",
+            "functions": functions,
+            "imports": imports,
+            "symbols": symbols,
+            "content_hash": content_hash,
+            "text": text,
         }
 
         point = qm.PointStruct(

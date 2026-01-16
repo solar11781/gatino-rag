@@ -1,0 +1,436 @@
+from pathlib import Path
+import sys
+from typing import Optional, List, Dict, Tuple
+from collections import Counter, defaultdict
+import re
+
+# --- Add project root to PYTHONPATH ---
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT))
+
+from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL
+
+from qdrant_client import QdrantClient
+from llama_index.core import VectorStoreIndex, Settings
+from llama_index.core.prompts import PromptTemplate
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.llms.ollama import Ollama
+
+from llama_index.core.schema import Document
+from llama_index.core.vector_stores import MetadataFilters, MetadataFilter
+
+# keyword retriever (BM25) in llamaindex
+from llama_index.retrievers.bm25 import BM25Retriever
+
+# LLM reranker (no torch, uses your LLM)
+from llama_index.core.postprocessor import LLMRerank
+
+
+# ---- Config ----
+COLLECTION_NAME = QDRANT_COLLECTION
+
+# Embedding server (your instance)
+OLLAMA_EMBED_URL = "http://127.0.0.1:11435"
+
+# LLM server
+OLLAMA_LLM_URL = "http://127.0.0.1:11435"
+
+# Chat model
+LLM_MODEL = "gemma:latest"
+
+
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+
+def normalize_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_code_explain_query(q: str) -> bool:
+    ql = q.lower()
+    triggers = [
+        "explain", "what does", "làm gì", "giải thích", "how does", "why does"
+    ]
+    return any(t in ql for t in triggers)
+
+
+def load_docs_from_qdrant(
+    client: QdrantClient,
+    collection: str,
+    limit: int = 3000,
+    repo_filter: Optional[str] = None,
+) -> List[Document]:
+    """
+    Scroll Qdrant and reconstruct Documents for BM25 / fallback keyword search.
+    This avoids docstore-empty issue.
+    """
+    docs: List[Document] = []
+    offset = None
+
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection,
+            limit=256,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+
+        for p in points:
+            payload = p.payload or {}
+            text = payload.get("text", "")
+            if not text or not text.strip():
+                continue
+
+            if repo_filter and payload.get("repo_name") != repo_filter:
+                continue
+
+            meta = {
+                "repo_name": payload.get("repo_name"),
+                "file_path": payload.get("file_path"),
+                "start_line": payload.get("start_line"),
+                "end_line": payload.get("end_line"),
+                "language": payload.get("language"),
+                "chunk_id": payload.get("chunk_id"),
+                "subchunk_id": payload.get("subchunk_id"),
+                "type": payload.get("type", "code"),
+            }
+
+            docs.append(Document(text=text, metadata=meta))
+
+            if len(docs) >= limit:
+                return docs
+
+        if offset is None:
+            break
+
+    return docs
+
+
+def choose_repo_from_nodes(source_nodes, min_repos: int = 2) -> Optional[str]:
+    """If multiple repos appear in retrieved nodes, ask user to pick one."""
+    if not source_nodes:
+        return None
+
+    repos = []
+    for sn in source_nodes:
+        meta = sn.node.metadata or {}
+        repo = meta.get("repo_name")
+        if repo:
+            repos.append(repo)
+
+    uniq = sorted(set(repos))
+    if len(uniq) < min_repos:
+        return None
+
+    counts = Counter(repos)
+
+    print("\nFound results from multiple repos:")
+    for i, r in enumerate(uniq, 1):
+        print(f"  [{i}] {r}  (hits={counts[r]})")
+
+    choice = input("Choose repo number (Enter to skip): ").strip()
+    if not choice:
+        return None
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(uniq):
+            return uniq[idx]
+    except Exception:
+        pass
+
+    print("Invalid choice, skipping repo filter.")
+    return None
+
+
+def merge_nodes(
+    vec_nodes: List,
+    kw_nodes: List,
+    top_k: int = 15,
+) -> List:
+    """
+    Merge vector + keyword nodes.
+    Strategy:
+      - keep best score per unique (repo,file,start,end,text-hash)
+      - interleave (favor vector slightly)
+    """
+    def key(sn):
+        meta = sn.node.metadata or {}
+        return (
+            meta.get("repo_name"),
+            meta.get("file_path"),
+            meta.get("start_line"),
+            meta.get("end_line"),
+            normalize_ws((sn.node.text or "")[:120]),
+        )
+
+    best = {}
+    for sn in vec_nodes:
+        k = key(sn)
+        best[k] = sn
+
+    for sn in kw_nodes:
+        k = key(sn)
+        if k not in best:
+            best[k] = sn
+
+    merged = list(best.values())
+    return merged[:top_k]
+
+
+# ------------------------------------------------------------
+# Prompts
+# ------------------------------------------------------------
+
+QA_PROMPT = PromptTemplate(
+    """
+You are a senior software engineer assistant.
+Use the context below to answer the question.
+
+Rules:
+- If the answer is explicitly present in the context, you MUST quote the exact string/token.
+- If you see a header name, return it exactly (case-sensitive).
+- If you see a prefix stripped, return it exactly (including spaces).
+- Do NOT say "not enough info" if the context contains the answer.
+- If the snippet contains the exact answer, you MUST answer directly.
+- Always cite file paths from the sources when you mention them.
+- If the answer is not present at all, say: "I don't know".
+
+Answer format:
+- File: <repo/file_path:start-end>
+- Evidence: <exact code snippet from context>
+- Explanation: <short reason 1-2 sentences>
+
+Context:
+---------------------
+{context_str}
+---------------------
+
+Question: {query_str}
+
+Answer:
+At the end, include a "Sources:" section listing 1-3 file paths used.
+"""
+)
+
+EXPLAIN_PROMPT = PromptTemplate(
+    """
+You are a senior software engineer assistant.
+Explain what the code is doing using ONLY the context.
+
+Rules:
+- Summarize behavior in bullet points.
+- Mention key function calls / variables you see.
+- Always cite file paths from the sources.
+- If context is insufficient, say: "I don't know".
+
+Answer format:
+- What it does: ...
+- Steps:
+  - ...
+  - ...
+- Evidence (quote):
+  - "..."
+  - "..."
+- Files:
+  - repo/file_path:start-end
+
+Context:
+---------------------
+{context_str}
+---------------------
+
+Question: {query_str}
+
+Answer:
+
+"""
+)
+
+
+# ------------------------------------------------------------
+# Build Engines
+# ------------------------------------------------------------
+
+def build_vector_query_engine(top_k: int = 15, repo_filter: Optional[str] = None, explain_mode: bool = False):
+    client = QdrantClient(url=QDRANT_URL)
+
+    vector_store = QdrantVectorStore(
+        client=client,
+        collection_name=COLLECTION_NAME,
+        text_key="text",
+    )
+
+    Settings.embed_model = OllamaEmbedding(
+        model_name=EMBED_MODEL,
+        base_url=OLLAMA_EMBED_URL,
+    )
+    Settings.llm = Ollama(
+        model=LLM_MODEL,
+        base_url=OLLAMA_LLM_URL,
+        request_timeout=120.0,
+    )
+
+    index = VectorStoreIndex.from_vector_store(vector_store)
+
+    prompt = EXPLAIN_PROMPT if explain_mode else QA_PROMPT
+
+    filters = None
+    if repo_filter:
+        filters = MetadataFilters(filters=[MetadataFilter(key="repo_name", value=repo_filter)])
+
+    # query_engine for vector retrieval
+    query_engine = index.as_query_engine(
+        similarity_top_k=top_k,
+        text_qa_template=prompt,
+        response_mode="compact",
+        filters=filters,
+    )
+
+    return query_engine, client
+
+
+def build_keyword_bm25_retriever(client: QdrantClient, top_k: int = 15, repo_filter: Optional[str] = None):
+    docs = load_docs_from_qdrant(client, COLLECTION_NAME, limit=3000, repo_filter=repo_filter)
+    print(f"[BM25] loaded docs={len(docs)} (repo_filter={repo_filter})")
+
+    if not docs:
+        return None
+
+    # BM25 retriever works on local docs
+    bm25 = BM25Retriever.from_defaults(
+        nodes=docs,  # if your version errors, change to: documents=docs
+        similarity_top_k=top_k,
+    )
+    return bm25
+
+
+def llm_rerank_nodes(query: str, nodes: List, top_n: int = 8) -> List:
+    """
+    Rerank nodes using LLM (no sentence-transformers).
+    """
+    if not nodes:
+        return nodes
+
+    reranker = LLMRerank(
+        top_n=top_n,
+        llm=Settings.llm,
+    )
+    return reranker.postprocess_nodes(nodes, query_str=query)
+
+
+# ------------------------------------------------------------
+# Main Loop
+# ------------------------------------------------------------
+
+def main():
+    repo_filter = None
+    top_k = 15
+
+    print(f"RAG ready | collection={COLLECTION_NAME}")
+    print(f"Embedding={EMBED_MODEL} @ {OLLAMA_EMBED_URL}")
+    print(f"LLM={LLM_MODEL} @ {OLLAMA_LLM_URL}")
+    print("Type 'exit' to quit.\n")
+
+    # Build initial vector engine
+    query_engine, qdrant_client = build_vector_query_engine(
+        top_k=top_k,
+        repo_filter=repo_filter,
+        explain_mode=False,
+    )
+
+    while True:
+        q = input("Query> ").strip()
+        if not q or q.lower() == "exit":
+            break
+
+        explain_mode = is_code_explain_query(q)
+        query_engine, qdrant_client = build_vector_query_engine(
+            top_k=top_k,
+            repo_filter=repo_filter,
+            explain_mode=explain_mode,
+        )
+
+        # -----------------------------
+        # 1) Vector retrieval
+        # -----------------------------
+        res = query_engine.query(q)
+        vec_nodes = res.source_nodes or []
+        print(f"\n[DEBUG] vector nodes={len(vec_nodes)}")
+
+        # ask repo disambiguation if needed
+        repo_choice = choose_repo_from_nodes(vec_nodes)
+        if repo_choice:
+            repo_filter = repo_choice
+            print(f"\nUsing repo_filter = {repo_filter}\n")
+
+            query_engine, qdrant_client = build_vector_query_engine(
+                top_k=top_k,
+                repo_filter=repo_filter,
+                explain_mode=explain_mode,
+            )
+            res = query_engine.query(q)
+            vec_nodes = res.source_nodes or []
+            print(f"[DEBUG] vector nodes(after filter)={len(vec_nodes)}")
+
+        # -----------------------------
+        # 2) Fallback keyword (BM25) if vector weak
+        # -----------------------------
+        kw_nodes = []
+        if len(vec_nodes) < 3:
+            print("[DEBUG] vector weak → running BM25 fallback ...")
+            bm25 = build_keyword_bm25_retriever(qdrant_client, top_k=top_k, repo_filter=repo_filter)
+            if bm25:
+                kw_nodes = bm25.retrieve(q)
+                print(f"[DEBUG] bm25 nodes={len(kw_nodes)}")
+
+        # -----------------------------
+        # 3) Hybrid merge
+        # -----------------------------
+        merged_nodes = merge_nodes(vec_nodes, kw_nodes, top_k=top_k)
+        print(f"[DEBUG] merged nodes={len(merged_nodes)}")
+
+        # -----------------------------
+        # 4) LLM rerank
+        # -----------------------------
+        reranked = llm_rerank_nodes(q, merged_nodes, top_n=8)
+        print(f"[DEBUG] reranked nodes={len(reranked)}")
+
+        # -----------------------------
+        # 5) Synthesize final answer using reranked nodes
+        # -----------------------------
+        # We reuse the LlamaIndex response synthesizer by making a fake response object:
+        # easiest: run a query again but override its source_nodes.
+        res.source_nodes = reranked
+
+        answer_text = res.response or str(res)
+        print("\nAnswer:\n", answer_text)
+
+        # -----------------------------
+        # Show sources + snippets
+        # -----------------------------
+        if reranked:
+            print("\nSources (top 5):")
+            for sn in reranked[:5]:
+                node = sn.node
+                meta = node.metadata or {}
+                fp = meta.get("file_path", "unknown")
+                sl = meta.get("start_line", "?")
+                el = meta.get("end_line", "?")
+                repo = meta.get("repo_name", "")
+                score = getattr(sn, "score", None)
+
+                print(f"- score={score} | {repo}/{fp}:{sl}-{el}")
+
+                text = node.text or ""
+                snippet = text[:350].replace("\n", "\\n")
+                print(f"  snippet: {snippet}\n")
+
+        print("\n" + "-" * 60 + "\n")
+
+
+if __name__ == "__main__":
+    main()
