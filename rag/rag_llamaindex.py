@@ -115,7 +115,7 @@ def build_query_engine(top_k: int = 40, repo_filter: Optional[str] = None) -> Tu
     Settings.llm = Ollama(
         model=LLM_MODEL,
         base_url=OLLAMA_LLM_URL,
-        request_timeout=300.0,
+        request_timeout=120.0,
     )
 
     index = VectorStoreIndex.from_vector_store(vector_store)
@@ -262,8 +262,28 @@ def score_line_match(line: str, tokens: List[str]) -> int:
     for t in tokens:
         if t in STOP_TOKENS or len(t) < 3:
             continue
-        if t.lower() in l:
-            score += 2 if len(t) >= 6 else 1
+        # if t.lower() in l:
+        #     score += 2 if len(t) >= 6 else 1
+
+        # normalize token to alnum root
+        t_clean = re.sub(r"[^a-z0-9]", "", t.lower())
+        if not t_clean:
+            continue
+
+        # exact or substring match (strong for long tokens)
+        if t_clean in l:
+            score += 2 if len(t_clean) >= 6 else 1
+            continue
+
+        # partial-root match: allow long-token prefixes to match morphological variants
+        # e.g., "authentication" -> matches "authenticated" or "is_authenticated"
+        if len(t_clean) >= 6:
+            prefix = t_clean[:6]
+            if prefix in l:
+                score += 2
+                continue
+
+
     return score
 
 
@@ -459,6 +479,19 @@ def main():
             print(f"\nAuto repo filter detected: {detected_repo}\n")
 
         res = query_engine.query(q)
+
+        # # DEBUG: quickly show retrieval hit count + first nodes
+        # try:
+        #     hits = len(res.source_nodes) if getattr(res, "source_nodes", None) else 0
+        # except Exception:
+        #     hits = 0
+        # print(f"\n[DEBUG] retrieval hits: {hits}")
+        # if hits:
+        #     for i, sn in enumerate(res.source_nodes[:5], start=1):
+        #         meta = sn.node.metadata or {}
+        #         print(f"[DEBUG] node{i}: repo={meta.get('repo_name')}, file={meta.get('file_path')}, "
+        #               f"lines={meta.get('start_line','?')}-{meta.get('end_line','?')}, score={getattr(sn,'score',None)}")
+        #     print()
 
         # if multiple repos -> ask user to choose -> requery
         if res.source_nodes and not detected_repo:
