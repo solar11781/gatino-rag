@@ -8,12 +8,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import json
 from config import (
     MAX_CHUNK_CHARS,
-    CHUNKS_JSONL,
+    CHUNKS_JSONL_PATH,
 )
 
 bad = []
 
-with open(CHUNKS_JSONL, "r", encoding="utf-8") as f:
+with open(CHUNKS_JSONL_PATH, "r", encoding="utf-8") as f:
     for i, line in enumerate(f):
         obj = json.loads(line)
         text = obj.get("text", "")

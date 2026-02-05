@@ -2,10 +2,12 @@ from pathlib import Path
 
 
 # Path to cleaned dataset
-CLEANED_ROOT = Path(__file__).resolve().parent / "codrepo"
+CLEANED_DATASET = "codrepo"
+CLEANED_ROOT = Path(__file__).resolve().parent / CLEANED_DATASET
 
 # Output file for code chunks
-CHUNKS_JSONL = Path(__file__).resolve().parent / "code_chunks.jsonl"
+CHUNKS_JSONL ="code_chunks.jsonl"
+CHUNKS_JSONL_PATH = Path(__file__).resolve().parent / CHUNKS_JSONL
 
 CODE_EXTS = {
     ".py",

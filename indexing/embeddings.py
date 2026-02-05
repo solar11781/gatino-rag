@@ -5,7 +5,6 @@ from config import EMBED_MODEL
 
 
 # By default, this talks to http://localhost:11434.
-# ollama_client = Client(host="http://127.0.0.1:11435")
 ollama_client = Client()
 
 def embed_text(text: str) -> List[float]:

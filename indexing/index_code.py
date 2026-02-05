@@ -16,7 +16,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
 from config import (
-    CHUNKS_JSONL,
+    CHUNKS_JSONL_PATH,
     QDRANT_URL,
     QDRANT_COLLECTION,
     BATCH_SIZE,
@@ -69,12 +69,12 @@ def sha1(text: str) -> str:
 
 
 def index_chunks():
-    if not CHUNKS_JSONL.is_file():
-        print(f"[ERROR] Chunks file not found: {CHUNKS_JSONL}")
+    if not CHUNKS_JSONL_PATH.is_file():
+        print(f"[ERROR] Chunks file not found: {CHUNKS_JSONL_PATH}")
         return
     
     # Count total chunks for progress bar
-    with CHUNKS_JSONL.open("r", encoding="utf-8") as f:
+    with CHUNKS_JSONL_PATH.open("r", encoding="utf-8") as f:
         total_chunks = sum(1 for line in f if line.strip())
 
     # Connect to Qdrant
@@ -88,7 +88,7 @@ def index_chunks():
     num_chunks = 0
 
     for chunk in tqdm(
-        iter_chunks(CHUNKS_JSONL),
+        iter_chunks(CHUNKS_JSONL_PATH),
         total=total_chunks,
         desc="Indexing chunks",
     ):

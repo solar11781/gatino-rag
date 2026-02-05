@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
-from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL, OLLAMA_EMBED_URL, OLLAMA_LLM_URL, LLM_MODEL
+from config import QDRANT_URL, QDRANT_COLLECTION, EMBED_MODEL, CODE_EXTS,OLLAMA_EMBED_URL, OLLAMA_LLM_URL, LLM_MODEL
 
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.core.prompts import PromptTemplate
@@ -36,17 +36,82 @@ DEBUG_CONTEXT = False          # print approximate context_str
 DEBUG_RENDERED_PROMPT = False  # print rendered prompt text
 DEBUG_FILES = False            # print retrieved file list
 
+# Retrieval strictness
+MIN_SIMILARITY_SCORE = 0.25  # if top score below this => "Not found"
+
 
 # -----------------------------
 # Helpers
 # -----------------------------
 def detect_repo_from_query(q: str) -> Optional[str]:
     """
-    If user includes repo name in query (e.g. 'repo:ChessCode' or 'in ChessCode'), auto filter.
+    Match explicit repo syntax:
+    - repo:RepoName
+    - repo=RepoName
+    - in repo RepoName
     """
-    m = re.search(r"(?:repo:|in\s+)([a-zA-Z0-9\-_]+)", q, re.IGNORECASE)
+    if not q:
+        return None
+
+    patterns = [
+        r"\brepo\s*[:=]\s*([a-zA-Z0-9\-_]+)",
+        r"\bin\s+repo\s+([a-zA-Z0-9\-_]+)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, q, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().strip(",.;")
+    return None
+
+
+LANG_ALIASES = {
+    "python": "py",
+    "py": "py",
+    "javascript": "js",
+    "js": "js",
+    "typescript": "ts",
+    "ts": "ts",
+    "tsx": "tsx",
+    "jsx": "jsx",
+    "java": "java",
+    "kotlin": "kt",
+    "kt": "kt",
+    "c#": "cs",
+    "csharp": "cs",
+    "c_sharp": "cs",
+    "cs": "cs",
+    "go": "go",
+    "golang": "go",
+    "php": "php",
+    "ruby": "rb",
+    "rb": "rb",
+    "rust": "rs",
+    "rs": "rs",
+    "bash": "sh",
+    "shell": "sh",
+    "sh": "sh",
+    "bat": "bat",
+    "yaml": "yaml",
+    "yml": "yml",
+    "json": "json",
+}
+
+def detect_language_from_query(q: str) -> Optional[str]:
+    if not q:
+        return None
+
+    ql = q.lower()
+    # prefer explicit "written in <lang>" / "in <lang>"
+    m = re.search(r"\b(?:written in|in|using)\s+([a-zA-Z\#_]+)\b", ql)
     if m:
-        return m.group(1).strip()
+        lang = m.group(1).strip()
+        return LANG_ALIASES.get(lang)
+
+    # fallback to direct mentions
+    for k, v in LANG_ALIASES.items():
+        if re.search(rf"\b{re.escape(k)}\b", ql):
+            return v
+
     return None
 
 
@@ -100,7 +165,11 @@ def normalize_query_tokens(q: str) -> List[str]:
     return toks
 
 
-def build_query_engine(top_k: int = 40, repo_filter: Optional[str] = None) -> Tuple[Any, PromptTemplate]:
+def build_query_engine(
+    top_k: int = 40,
+    repo_filter: Optional[str] = None,
+    lang_filter: Optional[str] = None,
+) -> Tuple[Any, PromptTemplate]:
     client = QdrantClient(url=QDRANT_URL)
     vector_store = QdrantVectorStore(
         client=client,
@@ -149,8 +218,13 @@ Answer format:
     )
 
     filters = None
+    filter_list = []
     if repo_filter:
-        filters = MetadataFilters(filters=[MetadataFilter(key="repo_name", value=repo_filter)])
+        filter_list.append(MetadataFilter(key="repo_name", value=repo_filter))
+    if lang_filter:
+        filter_list.append(MetadataFilter(key="language", value=lang_filter))
+    if filter_list:
+        filters = MetadataFilters(filters=filter_list)
 
     query_engine = index.as_query_engine(
         similarity_top_k=top_k,
@@ -249,7 +323,40 @@ STOP_TOKENS = {
     "the", "and", "with", "this", "that", "what", "which", "where", "when", "from",
     "trong", "project", "file", "repo", "hàm", "ham", "nào", "nao", "xử", "xu", "lý", "ly",
     "kiểm", "kiem", "tra", "nước", "nuoc", "đi", "di", "hợp", "hop", "lệ", "le",
-    "valid", "move", "check", "logic", "giải", "giai", "thích", "thich"
+    "valid", "move", "check", "logic", "giải", "giai", "thích", "thich", "written"
+}
+
+GENERIC_QUERY_TOKENS = {
+    "auth", "authentication", "authorize", "authorization",
+    "token", "jwt", "bearer",
+    "database", "db", "sql", "orm",
+    "api", "route", "routes", "router", "endpoint",
+    "middleware", "config", "configuration", "module",
+    # languages (avoid treating as specific identifiers)
+    "python", "py", "javascript", "js", "typescript", "ts", "tsx", "jsx",
+    "java", "kotlin", "kt", "csharp", "c_sharp", "cs", "go", "golang",
+    "php", "ruby", "rb", "rust", "rs", "bash", "shell", "sh",
+}
+
+INTENT_KEYWORDS = {
+    "auth": ["auth", "authentication", "authenticated", "authorize", "authorization", "security", "login", "signin", "permission"],
+    "token": ["token", "jwt", "bearer", "session"],
+    "db": ["db", "database", "datasource", "connection", "sequelize", "mongoose", "sql", "orm", "repository"],
+    "routes": ["route", "routes", "router", "controller", "endpoint", "api"],
+    "middleware": ["middleware", "middlewares", "interceptor", "filter"],
+}
+
+INTENT_PATH_HINTS = {
+    "auth": ["auth", "authentication", "security", "jwt", "token", "login", "account", "accounts", "user", "users"],
+    "token": ["token", "jwt", "session"],
+    "db": ["repository", "dao", "db", "database", "datasource", "entity", "model", "migration", "schema"],
+    "routes": ["route", "routes", "router", "controller", "endpoint", "api"],
+    "middleware": ["middleware", "middlewares", "interceptor", "filter"],
+}
+
+BAD_PATH_SEGMENTS = {
+    "test", "tests", "__tests__", "spec", "mock", "fixture", "sample",
+    "openapi", "swagger", "kubernetes", "k8s", "docs", "doc",
 }
 
 def score_line_match(line: str, tokens: List[str]) -> int:
@@ -258,6 +365,7 @@ def score_line_match(line: str, tokens: List[str]) -> int:
     Higher = better evidence.
     """
     l = line.lower()
+    l_clean = re.sub(r"[^a-z0-9]", "", l)
     score = 0
     for t in tokens:
         if t in STOP_TOKENS or len(t) < 3:
@@ -271,7 +379,7 @@ def score_line_match(line: str, tokens: List[str]) -> int:
             continue
 
         # exact or substring match (strong for long tokens)
-        if t_clean in l:
+        if t_clean in l or (t_clean and t_clean in l_clean):
             score += 2 if len(t_clean) >= 6 else 1
             continue
 
@@ -279,7 +387,7 @@ def score_line_match(line: str, tokens: List[str]) -> int:
         # e.g., "authentication" -> matches "authenticated" or "is_authenticated"
         if len(t_clean) >= 6:
             prefix = t_clean[:6]
-            if prefix in l:
+            if prefix in l or (prefix and prefix in l_clean):
                 score += 2
                 continue
 
@@ -287,11 +395,17 @@ def score_line_match(line: str, tokens: List[str]) -> int:
     return score
 
 
-def extract_signature_tokens(q: str) -> List[str]:
+def extract_signature_tokens(q: str, repo_filter: Optional[str] = None) -> List[str]:
     """
     Pull likely identifiers: function names, class names, file names, snake_case, etc.
     """
     ql = (q or "").lower()
+    if repo_filter:
+        # remove repo name tokens from query to reduce false matches
+        repo_tokens = re.split(r"[^a-zA-Z0-9_]+", repo_filter.lower())
+        for t in repo_tokens:
+            if t:
+                ql = ql.replace(t, " ")
     toks = normalize_query_tokens(ql)
 
     # add common code intent tokens
@@ -318,8 +432,106 @@ def extract_signature_tokens(q: str) -> List[str]:
 
     return out[:20]
 
+def _has_specific_tokens(q: str) -> bool:
+    toks = normalize_query_tokens(q or "")
+    for t in toks:
+        if t in STOP_TOKENS or t in GENERIC_QUERY_TOKENS:
+            continue
+        if len(t) >= 4:
+            return True
+    return False
 
-def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Optional[Dict[str, Any]]:
+def _detect_intent(q: str) -> Optional[str]:
+    ql = (q or "").lower()
+    for intent, kws in INTENT_KEYWORDS.items():
+        if any(k in ql for k in kws):
+            return intent
+    return None
+
+def _is_code_file_path(fp: str) -> bool:
+    if not fp or "." not in fp:
+        return False
+    ext = "." + fp.lower().rsplit(".", 1)[-1]
+    return ext in CODE_EXTS
+
+
+def _path_has_bad_segment(fp: str) -> bool:
+    parts = [p.lower() for p in (fp or "").replace("\\", "/").split("/")]
+    for p in parts:
+        if not p:
+            continue
+        # exact match or substring (e.g., "employeemanagementtests")
+        if p in BAD_PATH_SEGMENTS:
+            return True
+        if any(bad in p for bad in BAD_PATH_SEGMENTS):
+            return True
+    return False
+
+def _filter_by_intent(
+    source_nodes,
+    intent: Optional[str],
+    prefer_code: bool = True,
+    allow_fallback: bool = True,
+    generic_query: bool = False,
+):
+    if not source_nodes or not intent:
+        return source_nodes
+
+    kws = INTENT_KEYWORDS.get(intent, [])
+    path_hints = INTENT_PATH_HINTS.get(intent, [])
+    if not kws:
+        return source_nodes
+
+    filtered = []
+    for sn in source_nodes:
+        meta = sn.node.metadata or {}
+        fp = meta.get("file_path", "")
+        fp_l = fp.lower()
+        text_l = (sn.node.text or "").lower()
+
+        if _path_has_bad_segment(fp_l):
+            continue
+        if prefer_code and not _is_code_file_path(fp_l):
+            continue
+
+        # Global intent-specific exclusions
+        if intent == "auth":
+            if "/client/" in fp_l or fp_l.endswith(".d.ts"):
+                continue
+        if intent == "middleware":
+            if fp_l.endswith("settings.py"):
+                continue
+
+        if generic_query and path_hints:
+            # avoid config-heavy settings files for auth/token queries
+            if intent in {"auth", "token", "middleware"} and fp_l.endswith("settings.py"):
+                continue
+            if intent == "auth":
+                # Avoid client model typings for auth; prefer server code/config
+                if "/client/" in fp_l or fp_l.endswith(".d.ts"):
+                    continue
+                if "/server/" not in fp_l and "/backend/" not in fp_l:
+                    continue
+
+            if any(k in fp_l for k in path_hints) or ("views.py" in fp_l) or ("serializers.py" in fp_l):
+                filtered.append(sn)
+            continue
+
+        if any(k in fp_l for k in kws) or any(k in text_l for k in kws):
+            filtered.append(sn)
+
+    if filtered:
+        return filtered
+    return source_nodes if allow_fallback else []
+
+
+def extract_evidence(
+    question: str,
+    source_nodes,
+    repo_filter: Optional[str] = None,
+    intent: Optional[str] = None,
+    max_nodes: int = 25,
+) -> Optional[Dict[str, Any]]:
     """
     Upgraded hard extraction:
     - Prefer actual definitions: Ruby `def`, Python `def`, JS/TS `function` / method patterns.
@@ -328,7 +540,9 @@ def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Option
     """
     q = question or ""
     ql = q.lower()
-    tokens = extract_signature_tokens(q)
+    tokens = extract_signature_tokens(q, repo_filter=repo_filter)
+    intent_keywords = INTENT_KEYWORDS.get(intent or "", [])
+    is_generic = not _has_specific_tokens(q) and bool(intent_keywords)
 
     best = None  # (score, evidence_line, files, answer_hint)
 
@@ -336,6 +550,7 @@ def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Option
         node = sn.node
         meta = node.metadata or {}
         fp = meta.get("file_path", "")
+
         repo = meta.get("repo_name", "")
         sl = meta.get("start_line", "?")
         el = meta.get("end_line", "?")
@@ -346,6 +561,39 @@ def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Option
         is_ruby = fp_l.endswith(".rb")
         is_py = fp_l.endswith(".py")
         is_js_ts = fp_l.endswith(".js") or fp_l.endswith(".ts") or fp_l.endswith(".tsx") or fp_l.endswith(".jsx")
+        is_java_like = fp_l.endswith(".java") or fp_l.endswith(".kt") or fp_l.endswith(".cs")
+
+        # For definition queries, skip non-code files to avoid config/doc hits
+        if _is_definition_query(q):
+            ext = "." + fp_l.split(".")[-1] if "." in fp_l else ""
+            if ext and ext not in CODE_EXTS:
+                continue
+
+        # Avoid config-heavy settings files for auth/token/middleware intent
+        if intent in {"auth", "token", "middleware"} and fp_l.endswith("settings.py"):
+            continue
+
+        # Skip obvious doc links for middleware intent
+        if intent == "middleware":
+            if any("docs.scrapy.org" in ln.lower() for ln in lines):
+                # still allow if file is actually middlewares.py
+                if "middlewares.py" not in fp_l:
+                    continue
+
+        if intent == "auth":
+            if "/client/" in fp_l or fp_l.endswith(".d.ts"):
+                continue
+
+        # Generic intent: try direct keyword evidence even if tokens don't match
+        if is_generic and intent_keywords:
+            for ln in lines:
+                ln_l = ln.lower()
+                if any(k in ln_l for k in intent_keywords):
+                    return {
+                        "answer": f"Found {intent} evidence line",
+                        "evidence": ln.strip(),
+                        "files": f"{repo}/{fp}:{sl}-{el}",
+                    }
 
         # Heuristic: deprioritize obvious UI/icon assets if query is about "valid move"
         if ("valid" in ql and "move" in ql) and ("pieceicon" in fp_l or "icon" in fp_l):
@@ -398,6 +646,24 @@ def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Option
                             "files": f"{repo}/{fp}:{sl}-{el}",
                         }
 
+        # Java/Kotlin/C#: method definition
+        if is_java_like:
+            for t in tokens:
+                if t in STOP_TOKENS or len(t) < 3:
+                    continue
+                pat = re.compile(
+                    rf"^\s*(public|private|protected|static|final|abstract|synchronized|\s)*\s*"
+                    rf"[A-Za-z0-9_<>\[\]]+\s+{re.escape(t)}\s*\(",
+                    re.IGNORECASE,
+                )
+                for ln in lines:
+                    if pat.search(ln):
+                        return {
+                            "answer": f"Found Java/Kotlin/C# method definition `{t}`",
+                            "evidence": ln.strip(),
+                            "files": f"{repo}/{fp}:{sl}-{el}",
+                        }
+
         # --- 2) Otherwise, pick best-scoring evidence line ---
         # Require at least 2 token hits (or 1 very strong token)
         for ln in lines:
@@ -411,6 +677,11 @@ def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Option
             if s < 2:
                 continue
 
+            if is_generic:
+                ln_l = ln.lower()
+                if not any(k in ln_l for k in intent_keywords) and not any(k in fp_l for k in intent_keywords):
+                    continue
+
             files = f"{repo}/{fp}:{sl}-{el}"
             if best is None or s > best[0]:
                 best = (s, ln.rstrip(), files, f"Found evidence line matching query tokens (score={s})")
@@ -423,6 +694,111 @@ def extract_evidence(question: str, source_nodes, max_nodes: int = 25) -> Option
         }
 
     return None
+
+
+def _parse_strict_response(text: str) -> Optional[Dict[str, str]]:
+    """
+    Parse the STRICT prompt response format:
+    - Answer: ...
+    - Evidence: "..."
+    - Files: repo/path:start-end
+    """
+    if not text:
+        return None
+
+    answer = None
+    evidence = None
+    files = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.lower().startswith("- answer:"):
+            answer = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("- evidence:"):
+            evidence = line.split(":", 1)[1].strip()
+            # strip surrounding quotes if present
+            if evidence.startswith('"') and evidence.endswith('"') and len(evidence) >= 2:
+                evidence = evidence[1:-1].strip()
+        elif line.lower().startswith("- files:"):
+            files = line.split(":", 1)[1].strip()
+
+    if not answer:
+        return None
+
+    return {"answer": answer, "evidence": evidence or "", "files": files or ""}
+
+
+def _evidence_in_sources(evidence: str, source_nodes) -> bool:
+    if not evidence:
+        return False
+    for sn in source_nodes or []:
+        if evidence in (sn.node.text or ""):
+            return True
+    return False
+
+
+def _parse_file_spec(files: str) -> Optional[Tuple[str, Optional[int], Optional[int]]]:
+    if not files:
+        return None
+    if ":" not in files:
+        return (files.strip(), None, None)
+    path_part, line_part = files.rsplit(":", 1)
+    path_part = path_part.strip()
+    line_part = line_part.strip()
+    if "-" in line_part:
+        s, e = line_part.split("-", 1)
+        try:
+            return (path_part, int(s), int(e))
+        except Exception:
+            return (path_part, None, None)
+    return (path_part, None, None)
+
+
+def _evidence_matches_file(evidence: str, files: str, source_nodes) -> bool:
+    if not evidence or not files:
+        return False
+    parsed = _parse_file_spec(files)
+    if not parsed:
+        return False
+    file_path, _, _ = parsed
+    for sn in source_nodes or []:
+        meta = sn.node.metadata or {}
+        repo = meta.get("repo_name", "")
+        fp = meta.get("file_path", "")
+        full = f"{repo}/{fp}".strip("/")
+        if file_path.strip("/") == full and evidence in (sn.node.text or ""):
+            return True
+    return False
+
+
+def _passes_score_cutoff(source_nodes, min_score: float) -> bool:
+    if not source_nodes:
+        return False
+    scores = [getattr(sn, "score", None) for sn in source_nodes]
+    scores = [s for s in scores if s is not None]
+    if not scores:
+        return True  # no scores provided; don't block
+    return max(scores) >= min_score
+
+
+def _filter_source_nodes(source_nodes, repo_filter: Optional[str], lang_filter: Optional[str]):
+    if not source_nodes:
+        return []
+    out = []
+    for sn in source_nodes:
+        meta = sn.node.metadata or {}
+        if repo_filter and meta.get("repo_name") != repo_filter:
+            continue
+        if lang_filter and meta.get("language") != lang_filter:
+            continue
+        out.append(sn)
+    return out
+
+
+def _is_definition_query(q: str) -> bool:
+    if not q:
+        return False
+    ql = q.lower()
+    return any(k in ql for k in ["defined", "definition", "define", "implement", "implemented", "implementation"])
 
 
 def print_sources(res, top_n: int = 5):
@@ -460,8 +836,9 @@ def print_sources(res, top_n: int = 5):
 def main():
     top_k = 40
     repo_filter = None
+    lang_filter = None
 
-    query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=repo_filter)
+    query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=repo_filter, lang_filter=lang_filter)
 
     print(f"RAG ready | collection={QDRANT_COLLECTION}")
     print(f"Embedding={EMBED_MODEL} @ {OLLAMA_EMBED_URL}")
@@ -474,9 +851,18 @@ def main():
             break
 
         detected_repo = detect_repo_from_query(q)
-        if detected_repo:
-            query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=detected_repo)
-            print(f"\nAuto repo filter detected: {detected_repo}\n")
+        detected_lang = detect_language_from_query(q)
+        repo_filter = detected_repo
+        lang_filter = detected_lang
+
+        if repo_filter or lang_filter:
+            query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=repo_filter, lang_filter=lang_filter)
+            if repo_filter:
+                print(f"\nAuto repo filter detected: {repo_filter}\n")
+            if lang_filter:
+                print(f"Auto language filter detected: {lang_filter}\n")
+        else:
+            query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=None, lang_filter=None)
 
         res = query_engine.query(q)
 
@@ -498,8 +884,25 @@ def main():
             picked_repo = choose_repo_interactively(res.source_nodes)
             if picked_repo:
                 print(f"\nRe-querying with repo filter = {picked_repo}\n")
-                query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=picked_repo)
+                repo_filter = picked_repo
+                query_engine, prompt = build_query_engine(top_k=top_k, repo_filter=repo_filter, lang_filter=lang_filter)
                 res = query_engine.query(q)
+                detected_repo = picked_repo
+
+        # Apply local filtering for safety (even if filters were used in retrieval)
+        if res.source_nodes:
+            res.source_nodes = _filter_source_nodes(res.source_nodes, repo_filter, lang_filter)
+
+        intent = _detect_intent(q)
+        if res.source_nodes and intent:
+            allow_fallback = _has_specific_tokens(q) or intent in {"auth", "token"}
+            res.source_nodes = _filter_by_intent(
+                res.source_nodes,
+                intent,
+                prefer_code=True,
+                allow_fallback=allow_fallback,
+                generic_query=not _has_specific_tokens(q),
+            )
 
         # Debug: show retrieved files quickly
         if DEBUG_FILES and res.source_nodes:
@@ -518,16 +921,37 @@ def main():
         if DEBUG_RENDERED_PROMPT:
             debug_rendered_prompt(q, res, prompt, max_nodes=8, max_chars=12000)
 
-        # HARD GATE: require evidence from snippets
+        # If top scores are too low, return Not found
+        if not _passes_score_cutoff(res.source_nodes, MIN_SIMILARITY_SCORE):
+            res.source_nodes = []
+
+        # If query asks for definition, prefer definition-based extraction first
         extracted = None
-        if res.source_nodes:
-            extracted = extract_evidence(q, res.source_nodes, max_nodes=25)
+        if _is_definition_query(q) and res.source_nodes:
+            extracted = extract_evidence(q, res.source_nodes, repo_filter=repo_filter, intent=intent, max_nodes=25)
+
+        # Prefer STRICT LLM output, then verify evidence is actually in sources and files match.
+        if not extracted:
+            llm_text = getattr(res, "response", None) or str(res) or ""
+            parsed = _parse_strict_response(llm_text)
+            if parsed and parsed.get("answer") and parsed.get("evidence"):
+                if parsed["answer"].lower().startswith("not found"):
+                    extracted = None
+                elif _evidence_in_sources(parsed["evidence"], res.source_nodes) and _evidence_matches_file(
+                    parsed["evidence"], parsed.get("files", ""), res.source_nodes
+                ):
+                    extracted = parsed
+
+        # Optional fallback: heuristic evidence from snippets (only if LLM failed)
+        if not extracted and res.source_nodes and (intent or _has_specific_tokens(q)):
+            extracted = extract_evidence(q, res.source_nodes, repo_filter=repo_filter, intent=intent, max_nodes=25)
 
         if not extracted:
             print("\nAnswer:")
             print("- Answer: Not found in provided context.")
             print("- Evidence: (none)")
             print("- Files: (none)")
+            res.source_nodes = []
         else:
             print("\nAnswer:")
             print(f"- Answer: {extracted['answer']}")

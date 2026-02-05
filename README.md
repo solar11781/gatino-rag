@@ -205,3 +205,11 @@ python helper_scripts/search.py
 ## Notes
 
 - Tree-sitter versions are pinned for compatibility
+
+## Contributions
+
+| Contributor      | Responsibilities                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| Nguyen Duc Manh  | Data crawling, dataset cleaning, testing the RAG system, and fixing minor issues in the RAG components          |
+| Bui Tran Gia Bao | Code chunking and indexing, integration of the RAG service into the Gatino platform, and testing the RAG system |
+| Nguyen Ha Khue   | Design and implementation of the RAG system, testing, debugging, and fixing issues in the RAG components        |

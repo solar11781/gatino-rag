@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from config import (
     CLEANED_ROOT,
-    CHUNKS_JSONL,
+    CHUNKS_JSONL_PATH,
     CODE_EXTS,
     MIN_LINES_PER_CHUNK,
     USE_TREE_SITTER,
@@ -222,7 +222,7 @@ def main():
 
     total_chunks = 0
 
-    with CHUNKS_JSONL.open("w", encoding="utf-8") as out_f:
+    with CHUNKS_JSONL_PATH.open("w", encoding="utf-8") as out_f:
         for file_path in tqdm(files, desc="Chunking code files"):
             chunks = chunk_file(file_path)
             total_chunks += len(chunks)
@@ -230,7 +230,7 @@ def main():
                 out_f.write(json.dumps(ch, ensure_ascii=False) + "\n")
 
     print(f"Done. Created {total_chunks} code chunks.")
-    print(f"Saved to: {CHUNKS_JSONL}")
+    print(f"Saved to: {CHUNKS_JSONL_PATH}")
 
 
 if __name__ == "__main__":
