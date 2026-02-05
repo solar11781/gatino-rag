@@ -4,6 +4,9 @@ A local, script-based pipeline for building a **semantic search / RAG system ove
 
 This project takes raw source code from one or more repositories, **splits it into meaningful chunks**, **embeds those chunks locally**, and **indexes them into a vector database** so they can later be searched or used in RAG systems.
 
+> The code for data crawling and dataset cleaning is maintained in a separate repository:  
+> **[Data Crawling & Cleaning Repository](https://github.com/Bill2926/RepoScrawler)**
+
 ## Pipeline Overview
 
 The codebase dataset is expected to be organized by repository, where each top-level folder represents a repo.
@@ -208,8 +211,8 @@ python helper_scripts/search.py
 
 ## Contributions
 
-| Contributor      | Responsibilities                                                                                                |
-| ---------------- | --------------------------------------------------------------------------------------------------------------- |
-| Nguyen Duc Manh  | Data crawling, dataset cleaning, testing the RAG system, and fixing minor issues in the RAG components          |
-| Bui Tran Gia Bao | Code chunking and indexing, integration of the RAG service into the Gatino platform, and testing the RAG system |
-| Nguyen Ha Khue   | Design and implementation of the RAG system, testing, debugging, and fixing issues in the RAG components        |
+| Contributor                                    | Responsibilities                                                                                                |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [Nguyen Duc Manh](https://github.com/Bill2926) | Data crawling, dataset cleaning, testing the RAG system, and fixing minor issues in the RAG components          |
+| Bui Tran Gia Bao                               | Code chunking and indexing, integration of the RAG service into the Gatino platform, and testing the RAG system |
+| [Nguyen Ha Khue](https://github.com/bbyyangie) | Design and implementation of the RAG system, testing, debugging, and fixing issues in the RAG components        |
