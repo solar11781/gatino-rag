@@ -5,7 +5,8 @@ A local, script-based pipeline for building a **semantic search / RAG system ove
 This project takes raw source code from one or more repositories, **splits it into meaningful chunks**, **embeds those chunks locally**, and **indexes them into a vector database** so they can later be searched or used in RAG systems.
 
 > The code for data crawling and dataset cleaning is maintained in a separate repository:  
-> **[Data Crawling & Cleaning Repository](https://github.com/Bill2926/RepoScrawler)**
+> **[Data Crawling & Cleaning Repository](https://github.com/Bill2926/RepoScrawler)**  
+> The cleaned dataset from that repository will be placed in the root directory of this repository to be used for indexing and chunking
 
 ## Pipeline Overview
 
@@ -49,7 +50,7 @@ Result: a fully populated Qdrant collection containing embeddings and metadata f
 ## Project Structure
 
 ```
-indexing/
+gatino-rag/
 │
 ├── chunking/                 # Code for chunking
 │   ├── chunk_code.py         # Main chunking entrypoint
@@ -70,7 +71,7 @@ indexing/
 │   ├── chunks_viewer.py      # View chunks on QdrantDB
 │   └── __init__.py
 │
-├── dataset/
+├── dataset/                  # Cleaned codebase dataset
 ├── code_chunks.jsonl         # Generated chunked code records
 ├── config.py                 # Global configuration
 ├── README.md
@@ -107,10 +108,11 @@ Qdrant will be available at: http://localhost:6333
 
 Install Ollama for your OS and make sure the service is running.
 
-Pull the embedding model:
+Pull the embedding and LLM model:
 
 ```bash
-ollama pull nomic-embed-text
+ollama pull nomic-embed-text &
+ollama pull gemma:latest &
 ```
 
 ### 3. Set up Python environment and install dependencies
@@ -127,12 +129,6 @@ py -3.11 -m venv venv
 
 ```bash
 venv\Scripts\activate
-```
-
-### Upgrade pip
-
-```
-python -m pip install --upgrade pip
 ```
 
 ### Install dependencies
@@ -153,7 +149,7 @@ Edit `config.py`:
 - `QDRANT_URL` – `http://localhost:6333`
 - `QDRANT_COLLECTION` – collection name
 
-### 5. Run the pipeline
+### 5.1 Run the chunking and indexing pipeline
 
 All commands below must be run **from the project root directory**.
 
@@ -177,7 +173,7 @@ This step:
 - Embeds each chunk using Ollama
 - Upserts vectors and metadata into Qdrant
 
-## Helper Scripts
+### 5.2 Helper Scripts (Optional)
 
 Helper scripts are optional and run manually for inspection or validation:
 
@@ -205,14 +201,20 @@ python helper_scripts/chunks_viewer.py
 python helper_scripts/search.py
 ```
 
+### 6 Run RAG
+
+```bash
+python rag/rag_llamaindex.py
+```
+
 ## Notes
 
 - Tree-sitter versions are pinned for compatibility
 
 ## Contributions
 
-| Contributor                                    | Responsibilities                                                                                                |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| [Nguyen Duc Manh](https://github.com/Bill2926) | Data crawling, dataset cleaning, testing the RAG system, and fixing minor issues in the RAG components          |
-| Bui Tran Gia Bao                               | Code chunking and indexing, integration of the RAG service into the Gatino platform, and testing the RAG system |
-| [Nguyen Ha Khue](https://github.com/bbyyangie) | Design and implementation of the RAG system, testing, debugging, and fixing issues in the RAG components        |
+| Contributor                                    | Responsibilities                                                                                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [Nguyen Duc Manh](https://github.com/Bill2926) | Data crawling, dataset cleaning, testing the RAG system, and fixing minor issues in the RAG components   |
+| Bui Tran Gia Bao                               | Code chunking & indexing, and testing the RAG system                                                     |
+| [Nguyen Ha Khue](https://github.com/bbyyangie) | Design and implementation of the RAG system, testing, debugging, and fixing issues in the RAG components |
