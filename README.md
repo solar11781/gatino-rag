@@ -149,7 +149,7 @@ Edit `config.py`:
 - `QDRANT_URL` – `http://localhost:6333`
 - `QDRANT_COLLECTION` – collection name
 
-### 5.1 Run the chunking and indexing pipeline
+### 5.1. Run the chunking and indexing pipeline
 
 All commands below must be run **from the project root directory**.
 
@@ -173,7 +173,7 @@ This step:
 - Embeds each chunk using Ollama
 - Upserts vectors and metadata into Qdrant
 
-### 5.2 Helper Scripts (Optional)
+### 5.2. Helper Scripts (Optional)
 
 Helper scripts are optional and run manually for inspection or validation:
 
@@ -201,7 +201,7 @@ python helper_scripts/chunks_viewer.py
 python helper_scripts/search.py
 ```
 
-### 6 Run RAG
+### 6. Run RAG
 
 ```bash
 python rag/rag_llamaindex.py
